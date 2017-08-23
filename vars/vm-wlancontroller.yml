@@ -1,0 +1,10 @@
+---
+vms:
+    - name: wlancontroller
+      cpu: 1
+      mem: 1024
+      ip: 192.168.2.180
+      virt_type: kvm
+      virt_hypervisor: hvm
+      disk:
+          size: 10
