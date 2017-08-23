@@ -1,0 +1,123 @@
+---
+- name: setup arch vm
+  user: root
+  hosts: 192.168.2.180
+
+  vars_files:
+      - vars/vm-wlancontroller.yml
+
+  tasks:
+      - name: list root directory
+        shell: ls /root
+        register: root
+
+      - name: check if root folder contains install
+        fail: msg="no install file found"
+        when: root.stdout.find('install.txt') == -1
+
+      - name: set system clock
+        shell: timedatectl set-ntp true
+
+      - name: create swap and root partition
+        shell: echo -e "o\nn\np\n1\n\n+100M\np\nn\np\n2\n\n\n\np\nw\nw\n" | fdisk /dev/vda
+
+      - name: create swap
+        shell: mkswap /dev/vda1
+
+      - name: create root
+        shell: mkfs.ext4 /dev/vda2
+
+      - name: mount root under live cd
+        shell: mount /dev/vda2 /mnt
+
+      - name: set dns server
+        shell: echo "nameserver 192.168.2.1" > /etc/resolv.conf
+
+      - name: install base packages
+        shell: pacstrap /mnt base
+
+      - name: activate swap
+        shell: swapon /dev/vda1
+
+      - name: generate fstab
+        shell: genfstab -U /mnt >> /mnt/etc/fstab
+
+      - name: set timezone
+        file:
+          src: /usr/share/zoneinfo/Europe/Berlin
+          dest: /mnt/etc/localtime
+          state: link
+
+      - name: set hardware clock
+        shell: hwclock --systohc
+
+      - name: set locale
+        shell: echo "de_DE.UTF-8 UTF-8" >> /mnt/etc/locale.gen
+
+      - name: set lang variable
+        shell: echo "LANG=de_DE.UTF-8" > /mnt/etc/locale.conf
+
+      - name: set keyboard layout to german
+        shell: echo "KEYMAP=de-latin1" > /mnt/etc/vconsole.conf
+
+      - name: set hostname
+        shell: echo "{{item.name}}" > /mnt/etc/hostname
+        with_items: "{{ vms }}"
+
+      - name: set hosts
+        shell: echo -e "127.0.0.1	localhost.localdomain	localhost\n::1		localhost.localdomain	localhost\n127.0.1.1	{{item.name}}.localdomain	{{item.name}}" > /mnt/etc/hosts
+        with_items: "{{ vms }}"
+
+      - name: set ip address
+        shell: echo -e "[Match]\nName=ens3\n[Network]\nAddress={{item.ip}}/24\nGateway=192.168.2.1" > /mnt/etc/systemd/network/wired.network
+        with_items: "{{ vms }}"
+
+      - name: enable networkd
+        shell: arch-chroot /mnt systemctl enable systemd-networkd
+
+      - name: set root password
+        shell: arch-chroot /mnt echo -e "password\npassword" | (passwd root)
+
+      - name: install ssh server
+        shell: arch-chroot /mnt pacman -S --noconfirm openssh
+
+      - name: enable ssh server
+        shell: arch-chroot /mnt systemctl enable sshd
+
+      - name: create user
+        shell: arch-chroot /mnt useradd -m -p password -s /bin/bash mathias
+
+      - name: create ssh key folder for user
+        shell: mkdir /mnt/home/mathias/.ssh/
+
+      - name: create keyfile
+        shell: touch /mnt/home/mathias/.ssh/authorized_keys
+
+      - name: copy ssh key to authorized_keys
+        shell: echo "ssh-rsa DASJKDJAHSDLAHJD" > /mnt/home/mathias/.ssh/authorized_keys
+
+      - name: create initramfs
+        shell: arch-chroot /mnt mkinitcpio -p linux
+
+      - name: install grub
+        shell: arch-chroot /mnt pacman -S --noconfirm grub
+
+      - name: setup grub
+        shell: arch-chroot /mnt grub-install /dev/vda
+
+      - name: generate grub config
+        shell: arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+
+      - name: autoboot arch
+        replace:
+          dest=/mnt/etc/default/grub
+          regexp='GRUB_TIMEOUT=5'
+          replace='GRUB_TIMEOUT=0'
+
+      - name: unmount disk
+        shell: umount /mnt
+
+      - name: reboot
+        shell: sleep 2 && reboot
+        async: 1
+        poll: 0
