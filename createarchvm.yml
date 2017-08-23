@@ -1,0 +1,58 @@
+---
+- name: create arch vm
+  user: root
+  hosts: homeserver
+
+  vars_files:
+      - vars/vm-wlancontroller.yml
+
+  tasks:
+      - name: start libvirtd
+        service: name=libvirtd state=started enabled=yes
+        register: libvirtd
+
+      - name: wait for libvirtd to get up
+        pause: seconds=30
+        when: libvirtd.changed
+
+      - name: get list of vms
+        virt: command=list_vms
+        register: virt_vms
+
+      - name: get mount output
+        shell: mount
+        register: mount
+
+      - name: check if md0_crypt mounted
+        fail: msg="not mounted"
+        when: mount.stdout.find('md0_crypt') == -1
+
+      - name: precreate qcow2 image
+        shell: qemu-img create -f qcow2 -o preallocation=metadata /mnt/md0_crypt/Virtualization/VMs/{{ item.name }}.qcow2 {{ item.disk.size }}G
+        when: item.name not in virt_vms.list_vms
+        with_items: "{{ vms }}"
+
+      - name: create vm
+        shell: virt-install -n {{item.name}}
+                 -r {{ item.mem }}
+                 --vcpus {{ item.cpu }}
+                 --os-type linux
+                 --network=bridge:brlan,model=e1000
+                 --graphics vnc
+                 --{{item.virt_hypervisor}}
+                 --virt-type {{ item.virt_type }}
+                 --disk path=/mnt/md0_crypt/Virtualization/VMs/{{ item.name }}.qcow2,format=qcow2,bus=virtio,cache=none
+                 --cdrom /mnt/md0_crypt/Virtualization/ISOs/arch-autoboot.iso
+                 --boot=cdrom,hd
+                 --noautoconsole
+        when: item.name not in virt_vms.list_vms
+        with_items: "{{ vms }}"
+
+      - name: get guest info
+        virt: command=info
+        register: virt_info
+
+      - name: make sure all vms are running
+        virt: name={{item.name}} command=start
+        when: virt_info[item.name]['state'] != 'running'
+        with_items: "{{ vms }}"
